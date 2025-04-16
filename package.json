@@ -4,16 +4,17 @@
     "description": "A FLOSS alternative to Claude Code using Ollama for local LLM inference",
     "main": "src/index.js",
     "bin": {
-        "olc": "./bin/ollama-code.js"
+        "olc": "bin/ollama-code.js"
     },
     "scripts": {
-        "start": "node --experimental-json-modules bin/ollama-code.js",
+        "start": "node bin/ollama-code.js",
         "lint": "eslint src",
         "test": "jest"
     },
     "engines": {
         "node": ">=18.0.0"
     },
+    "preferGlobal": true,
     "keywords": [
         "ollama",
         "ai",

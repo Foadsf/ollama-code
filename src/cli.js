@@ -2,7 +2,13 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { startREPL } from './repl.js';
 import { getConfig, setConfig, listConfig } from './config.js';
-import pkg from '../package.json' assert { type: 'json' };
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf8'));
 const { version } = pkg;
 
 /**
@@ -13,7 +19,7 @@ export function startCLI(args) {
     const program = new Command();
 
     program
-        .name('ollama-code')
+        .name('olc')
         .description('A FLOSS alternative to Claude Code using Ollama for local LLM inference')
         .version(version);
 
@@ -68,7 +74,7 @@ export function startCLI(args) {
         .command('update')
         .description('Update to the latest version')
         .action(() => {
-            console.log('To update Ollama Code, run: npm update -g ollama-code');
+            console.log('To update Ollama Code, run: npm update -g olc');
         });
 
     // Parse arguments or show help

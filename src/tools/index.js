@@ -12,6 +12,8 @@ import { grepTool } from './grepTool.js';
 import { globTool } from './globTool.js';
 import { bashTool } from './bashTool.js';
 import { gitTool } from './gitTool.js';
+import { packageManagerTool } from './packageManagerTool.js';
+import { databaseTool } from './databaseTool.js';
 
 // Register all tools and their handlers
 const toolRegistry = {
@@ -54,6 +56,16 @@ const toolRegistry = {
         handler: gitTool,
         requiresPermission: true,
         description: 'Performs Git operations'
+    },
+    'PackageManagerTool': {
+        handler: packageManagerTool,
+        requiresPermission: true,
+        description: 'Manages project dependencies (npm, yarn, pnpm)'
+    },
+    'DatabaseTool': {
+        handler: databaseTool,
+        requiresPermission: true,
+        description: 'Executes queries on databases (SQLite, PostgreSQL)'
     }
 };
 

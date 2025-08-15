@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { getConfig } from './config.js';
+import { NetworkError } from './utils/errors.js';
 
 /**
  * Client for interacting with the Ollama API
@@ -14,6 +15,7 @@ export class OllamaClient {
     constructor(options = {}) {
         this.baseUrl = options.baseUrl || getConfig('ollamaBaseUrl') || 'http://localhost:11434';
         this.model = options.model || getConfig('ollamaModel') || 'codellama';
+        this.verbose = options.verbose || getConfig('verbose') || false;
     }
 
     /**
@@ -25,14 +27,14 @@ export class OllamaClient {
             const response = await fetch(`${this.baseUrl}/api/tags`);
 
             if (!response.ok) {
-                throw new Error(`Failed to list models: ${response.statusText}`);
+                throw new NetworkError(`Failed to list models: ${response.statusText}`);
             }
 
             const data = await response.json();
             return data.models || [];
         } catch (error) {
-            console.error('Error listing models:', error.message);
-            throw error;
+            if (error instanceof NetworkError) throw error;
+            throw new NetworkError(`Error listing models: ${error.message}`, { cause: error });
         }
     }
 
@@ -58,7 +60,8 @@ export class OllamaClient {
             });
 
             if (!response.ok) {
-                throw new Error(`Ollama API error: ${response.statusText}`);
+                const errorBody = await response.text();
+                throw new NetworkError(`Ollama API error: ${response.statusText} - ${errorBody}`);
             }
 
             // Handle streaming response
@@ -73,6 +76,12 @@ export class OllamaClient {
                     const { done, value } = await reader.read();
 
                     if (done) {
+                        // The stream has ended. Check for any leftover partial data.
+                        if (partialChunk.trim()) {
+                            if (this.verbose) {
+                                console.warn('[OllamaClient] Stream ended with incomplete data:', partialChunk);
+                            }
+                        }
                         return fullResponse;
                     }
 
@@ -114,7 +123,10 @@ export class OllamaClient {
                                             onProgress(json.message.content);
                                         }
                                     } catch (e) {
-                                        // Skip invalid JSON
+                                        if (this.verbose) {
+                                            console.warn(`[OllamaClient] Failed to parse JSON chunk from stream: ${e.message}`);
+                                            console.warn(`[OllamaClient] Chunk content:`, jsonStr);
+                                        }
                                     }
                                 }
                             }
@@ -133,8 +145,8 @@ export class OllamaClient {
                 return data;
             }
         } catch (error) {
-            console.error('Error in chat completion:', error.message);
-            throw error;
+            if (error instanceof NetworkError) throw error;
+            throw new NetworkError(`Error in chat completion: ${error.message}`, { cause: error });
         }
     }
 
@@ -157,14 +169,14 @@ export class OllamaClient {
             });
 
             if (!response.ok) {
-                throw new Error(`Failed to generate embeddings: ${response.statusText}`);
+                throw new NetworkError(`Failed to generate embeddings: ${response.statusText}`);
             }
 
             const data = await response.json();
             return data.embedding;
         } catch (error) {
-            console.error('Error generating embeddings:', error.message);
-            throw error;
+            if (error instanceof NetworkError) throw error;
+            throw new NetworkError(`Error generating embeddings: ${error.message}`, { cause: error });
         }
     }
 }

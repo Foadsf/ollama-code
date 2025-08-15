@@ -1,4 +1,4 @@
-import fs from 'fs/promises';
+import * as fs from 'fs/promises';
 import path from 'path';
 import { getConfig } from '../config.js';
 

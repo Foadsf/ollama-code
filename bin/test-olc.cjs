@@ -57,5 +57,5 @@ function checkOllama() {
 // Run the check
 checkOllama().then(() => {
     console.log('\nThis is a test script to verify Ollama connectivity.');
-    console.log('To use the full CLI, we need to fix the ESM import issues.');
+    console.log('The main CLI should now be working. You can run it with: npm start');
 });

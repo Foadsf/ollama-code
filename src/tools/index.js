@@ -1,5 +1,6 @@
 import { getConfig } from '../config.js';
 import { checkPermission } from '../permissions.js';
+import { ToolError, PermissionError } from '../utils/errors.js';
 
 // Import tool implementations
 import { fileReadTool } from './fileReadTool.js';
@@ -65,7 +66,7 @@ export async function executeToolCommand(toolCall) {
 
     // Check if tool exists
     if (!toolRegistry[name]) {
-        throw new Error(`Unknown tool: ${name}`);
+        throw new ToolError(`Unknown tool: ${name}`, name);
     }
 
     const tool = toolRegistry[name];
@@ -90,7 +91,7 @@ export async function executeToolCommand(toolCall) {
             // Request permission from user
             const granted = await checkPermission(name, args);
             if (!granted) {
-                throw new Error(`Permission denied for ${name}`);
+                throw new PermissionError(`Execution of tool '${name}' was denied.`);
             }
         }
     }
@@ -99,7 +100,11 @@ export async function executeToolCommand(toolCall) {
     try {
         return await tool.handler(args);
     } catch (error) {
-        throw new Error(`Error executing ${name}: ${error.message}`);
+        // Re-throw as a ToolError to add context, unless it already is one
+        if (error instanceof ToolError) {
+            throw error;
+        }
+        throw new ToolError(error.message, name);
     }
 }
 

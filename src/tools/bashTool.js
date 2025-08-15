@@ -1,6 +1,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getConfig } from '../config.js';
+import { ToolError } from '../utils/errors.js';
 
 // Promisify exec
 const execAsync = promisify(exec);
@@ -21,8 +22,9 @@ const BLOCKED_COMMANDS = [
  * @returns {Promise<string>} - Command output
  */
 export async function bashTool(args) {
+    const toolName = 'BashTool';
     if (!args.command) {
-        throw new Error('Command is required');
+        throw new ToolError('Command is required', toolName);
     }
 
     const command = args.command.trim();
@@ -31,7 +33,7 @@ export async function bashTool(args) {
 
     // Security check
     if (isCommandDangerous(command)) {
-        throw new Error('Command contains potentially dangerous operations and is blocked for security reasons');
+        throw new ToolError('Command contains potentially dangerous operations and is blocked for security reasons', toolName);
     }
 
     try {
@@ -47,7 +49,7 @@ export async function bashTool(args) {
 
         return stdout;
     } catch (error) {
-        throw new Error(`Command execution failed: ${error.message}`);
+        throw new ToolError(`Command execution failed: ${error.message}`, toolName);
     }
 }
 

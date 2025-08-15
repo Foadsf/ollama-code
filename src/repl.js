@@ -7,6 +7,7 @@ import { getOllamaClient } from './ollama.js';
 import { getConfig } from './config.js';
 import { executeToolCommand } from './tools/index.js';
 import { parseToolCalls } from './utils/parsing.js';
+import { handleError } from './utils/errorHandler.js';
 
 // Configure marked to render markdown in the terminal
 marked.use(markedTerminal());
@@ -60,29 +61,11 @@ The user is currently in the directory: ${process.cwd()}
 Respond in markdown format. Be concise and helpful.`
     };
 
-    // Process a user query and get response
-    const processQuery = async (query) => {
-        if (!query.trim()) {
-            return;
-        }
-
-        // Handle slash commands
-        if (query.startsWith('/')) {
-            await handleSlashCommand(query, { rl, conversation, ollama });
-            return;
-        }
-
-        // Add user message to conversation
-        conversation.push({ role: 'user', content: query });
-
-        // Prepare messages for the API (including system message)
-        const messages = [systemMessage, ...conversation];
-
-        // Create a spinner for loading indication
-        const spinner = ora('Thinking...').start();
-
+    // Main conversation processing loop
+    const handleConversationTurn = async (spinner) => {
         try {
             let response = '';
+            const messages = [systemMessage, ...conversation];
 
             await ollama.chatCompletion({
                 messages,
@@ -102,10 +85,10 @@ Respond in markdown format. Be concise and helpful.`
             const toolCalls = parseToolCalls(response);
             if (toolCalls.length > 0) {
                 for (const toolCall of toolCalls) {
-                    spinner.start(`Executing tool: ${toolCall.name}`);
+                    const toolSpinner = ora(`Executing tool: ${toolCall.name}`).start();
                     try {
                         const result = await executeToolCommand(toolCall);
-                        spinner.succeed(`Tool ${toolCall.name} executed`);
+                        toolSpinner.succeed(`Tool ${toolCall.name} executed`);
 
                         // Add tool result to conversation
                         conversation.push({
@@ -117,88 +100,50 @@ Respond in markdown format. Be concise and helpful.`
                         console.log(chalk.dim(`\nTool result received. Continuing conversation...\n`));
 
                         // Get further instructions from the model
-                        await processFollowup();
+                        await handleConversationTurn(ora('Getting next steps...').start());
+
                     } catch (error) {
-                        spinner.fail(`Tool ${toolCall.name} failed: ${error.message}`);
+                        handleError(error, { spinner: toolSpinner, verbose });
                         conversation.push({
                             role: 'user',
-                            content: `Tool ${toolCall.name} failed with error: ${error.message}`
+                            content: `Tool ${error.toolName || toolCall.name} failed with error: ${error.message}`
                         });
 
                         // Get further instructions from the model
-                        await processFollowup();
+                        await handleConversationTurn(ora('Getting next steps...').start());
                     }
                 }
             }
         } catch (error) {
-            spinner.fail(`Error: ${error.message}`);
-            console.error(chalk.red(`\nError: ${error.message}\n`));
+            handleError(error, { spinner, verbose });
+        }
+    };
+
+    // Process a user query and get response
+    const processQuery = async (query) => {
+        if (!query.trim()) {
+            return;
         }
 
-        // Exit if in print mode
+        // Handle slash commands
+        if (query.startsWith('/')) {
+            await handleSlashCommand(query, { rl, conversation, ollama });
+            if (!print) rl.prompt();
+            return;
+        }
+
+        // Add user message to conversation
+        conversation.push({ role: 'user', content: query });
+
+        // Start the conversation turn
+        const spinner = ora('Thinking...').start();
+        await handleConversationTurn(spinner);
+
+        // Exit if in print mode, otherwise prompt for next input
         if (print) {
             process.exit(0);
         } else {
             rl.prompt();
-        }
-    };
-
-    // Process a follow-up after tool execution
-    const processFollowup = async () => {
-        const spinner = ora('Getting next steps...').start();
-
-        try {
-            let response = '';
-
-            await ollama.chatCompletion({
-                messages: [systemMessage, ...conversation],
-                onProgress: (content) => {
-                    response = content;
-                    spinner.text = 'Receiving response...';
-                },
-            });
-
-            spinner.succeed('Response received');
-            console.log('\n' + marked(response) + '\n');
-
-            // Add assistant response to conversation
-            conversation.push({ role: 'assistant', content: response });
-
-            // Parse and execute any additional tool calls
-            const toolCalls = parseToolCalls(response);
-            if (toolCalls.length > 0) {
-                for (const toolCall of toolCalls) {
-                    spinner.start(`Executing tool: ${toolCall.name}`);
-                    try {
-                        const result = await executeToolCommand(toolCall);
-                        spinner.succeed(`Tool ${toolCall.name} executed`);
-
-                        // Add tool result to conversation
-                        conversation.push({
-                            role: 'user',
-                            content: `Tool result for ${toolCall.name}:\n\`\`\`\n${typeof result === 'object' ? JSON.stringify(result, null, 2) : result
-                                }\n\`\`\``
-                        });
-
-                        console.log(chalk.dim(`\nTool result received. Continuing conversation...\n`));
-
-                        // Recursive call to get further instructions
-                        await processFollowup();
-                    } catch (error) {
-                        spinner.fail(`Tool ${toolCall.name} failed: ${error.message}`);
-                        conversation.push({
-                            role: 'user',
-                            content: `Tool ${toolCall.name} failed with error: ${error.message}`
-                        });
-
-                        // Recursive call to get further instructions
-                        await processFollowup();
-                    }
-                }
-            }
-        } catch (error) {
-            spinner.fail(`Error: ${error.message}`);
-            console.error(chalk.red(`\nError: ${error.message}\n`));
         }
     };
 
@@ -310,7 +255,7 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
 
                 initSpinner.succeed('Generated OLLAMA_CODE.md guide');
             } catch (error) {
-                initSpinner.fail(`Failed to generate guide: ${error.message}`);
+                handleError(error, { spinner: initSpinner, verbose });
             }
             break;
 
@@ -330,8 +275,7 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
                     });
                 }
             } catch (error) {
-                modelsSpinner.fail(`Failed to fetch models: ${error.message}`);
-                console.log(chalk.red('\nMake sure Ollama is running on http://localhost:11434'));
+                handleError(error, { spinner: modelsSpinner, verbose });
             }
             break;
 

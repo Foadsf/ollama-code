@@ -1,6 +1,7 @@
-import fs from 'fs/promises';
+import * as fs from 'fs/promises';
 import path from 'path';
 import { getConfig } from '../config.js';
+import { ToolError } from '../utils/errors.js';
 
 /**
  * Tool for reading file contents
@@ -9,8 +10,9 @@ import { getConfig } from '../config.js';
  * @returns {Promise<string>} - File contents
  */
 export async function fileReadTool(args) {
+    const toolName = 'FileReadTool';
     if (!args.path) {
-        throw new Error('Path is required');
+        throw new ToolError('Path is required', toolName);
     }
 
     // Normalize and resolve the path
@@ -18,7 +20,7 @@ export async function fileReadTool(args) {
 
     // Check if path is within the project directory
     if (!filePath.startsWith(process.cwd())) {
-        throw new Error('Cannot read files outside the project directory');
+        throw new ToolError('Cannot read files outside the project directory', toolName);
     }
 
     // Check ignore patterns
@@ -26,7 +28,7 @@ export async function fileReadTool(args) {
     for (const pattern of ignorePatterns) {
         // Simple glob matching for ignored paths
         if (filePath.includes(pattern.replace(/\*/g, ''))) {
-            throw new Error(`Path matches ignore pattern: ${pattern}`);
+            throw new ToolError(`Path matches ignore pattern: ${pattern}`, toolName);
         }
     }
 
@@ -39,9 +41,10 @@ export async function fileReadTool(args) {
 
         return content;
     } catch (error) {
+        if (error instanceof ToolError) throw error;
         if (error.code === 'ENOENT') {
-            throw new Error(`File not found: ${args.path}`);
+            throw new ToolError(`File not found: ${args.path}`, toolName);
         }
-        throw new Error(`Failed to read file: ${error.message}`);
+        throw new ToolError(`Failed to read file: ${error.message}`, toolName);
     }
 }

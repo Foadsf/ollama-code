@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { ToolError } from '../utils/errors.js';
 
 /**
  * Tool for editing existing files
@@ -12,13 +13,14 @@ import path from 'path';
  * @returns {Promise<string>} - Success message
  */
 export async function fileEditTool(args) {
+    const toolName = 'FileEditTool';
     if (!args.path) {
-        throw new Error('Path is required');
+        throw new ToolError('Path is required', toolName);
     }
 
     if ((!args.oldContent && args.startLine === undefined) ||
         (!args.newContent && args.startLine === undefined)) {
-        throw new Error('Either oldContent/newContent pair or startLine/endLine pair is required');
+        throw new ToolError('Either oldContent/newContent pair or startLine/endLine pair is required', toolName);
     }
 
     // Normalize and resolve the path
@@ -26,7 +28,7 @@ export async function fileEditTool(args) {
 
     // Check if path is within the project directory
     if (!filePath.startsWith(process.cwd())) {
-        throw new Error('Cannot edit files outside the project directory');
+        throw new ToolError('Cannot edit files outside the project directory', toolName);
     }
 
     try {
@@ -42,7 +44,7 @@ export async function fileEditTool(args) {
 
             if (args.startLine < 0 || args.startLine >= lines.length ||
                 args.endLine < args.startLine || args.endLine >= lines.length) {
-                throw new Error('Invalid line range');
+                throw new ToolError('Invalid line range', toolName);
             }
 
             // Replace lines
@@ -55,7 +57,7 @@ export async function fileEditTool(args) {
         } else {
             // Edit by content replacement
             if (!content.includes(args.oldContent)) {
-                throw new Error('Old content not found in file');
+                throw new ToolError('Old content not found in file', toolName);
             }
 
             content = content.replace(args.oldContent, args.newContent);
@@ -66,9 +68,10 @@ export async function fileEditTool(args) {
 
         return `File ${args.path} updated successfully`;
     } catch (error) {
+        if (error instanceof ToolError) throw error;
         if (error.code === 'ENOENT') {
-            throw new Error(`File not found: ${args.path}`);
+            throw new ToolError(`File not found: ${args.path}`, toolName);
         }
-        throw new Error(`Failed to edit file: ${error.message}`);
+        throw new ToolError(`Failed to edit file: ${error.message}`, toolName);
     }
 }

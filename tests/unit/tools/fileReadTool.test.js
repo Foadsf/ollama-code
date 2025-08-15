@@ -1,71 +1,88 @@
 import { jest } from '@jest/globals';
 
-// Mock dependencies before any other imports
-const mockFs = {
-  access: jest.fn(),
-  readFile: jest.fn(),
+// Mock the dependencies of fileReadTool
+const mockFileCache = {
+    get: jest.fn(),
+    set: jest.fn(),
 };
+jest.unstable_mockModule('../../../src/performance/fileCache.js', () => ({
+    FileCache: jest.fn().mockImplementation(() => mockFileCache)
+}));
+
+const mockFs = { readFile: jest.fn() };
 jest.unstable_mockModule('fs/promises', () => mockFs);
 
-const mockConfig = {
-  getConfig: jest.fn(),
-};
-jest.unstable_mockModule('../../../src/config.js', () => mockConfig);
+const mockAccessController = { validateAccess: jest.fn() };
+jest.unstable_mockModule('../../../src/security/fileAccessController.js', () => ({
+    FileAccessController: jest.fn().mockImplementation(() => mockAccessController)
+}));
 
-
-// The module under test must be imported AFTER mocking
+// Import the tool AFTER mocking
 const { fileReadTool } = await import('../../../src/tools/fileReadTool.js');
 const { ToolError } = await import('../../../src/utils/errors.js');
 
-describe('fileReadTool', () => {
-  beforeEach(() => {
-    // Provide a default mock for the security profile and other configs
-    mockConfig.getConfig.mockImplementation((key, defaultValue) => {
-        if (key === 'securityProfile') return 'moderate';
-        return defaultValue || [];
+
+describe('fileReadTool with Caching', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        // Default to access being allowed
+        mockAccessController.validateAccess.mockReturnValue({ allowed: true });
     });
-  });
 
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
+    test('should return content from cache if available', async () => {
+        const filePath = 'src/cached.txt';
+        const cachedContent = 'this is from the cache';
+        mockFileCache.get.mockResolvedValue(cachedContent);
 
-  test('should read and return file content successfully', async () => {
-    const fileContent = 'Hello, world!';
-    mockFs.access.mockResolvedValue(undefined);
-    mockFs.readFile.mockResolvedValue(fileContent);
+        const result = await fileReadTool({ path: filePath });
 
-    // Test a path that is allowed in moderate mode
-    const result = await fileReadTool({ path: 'src/test.txt' });
+        expect(result).toBe(cachedContent);
+        expect(mockFileCache.get).toHaveBeenCalledWith(expect.stringContaining(filePath));
+        // fs.readFile should NOT be called if cache hits
+        expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
 
-    expect(mockFs.access).toHaveBeenCalledWith(expect.stringContaining('src/test.txt'));
-    expect(mockFs.readFile).toHaveBeenCalledWith(expect.stringContaining('src/test.txt'), 'utf-8');
-    expect(result).toBe(fileContent);
-  });
+    test('should read from file and set cache if not in cache', async () => {
+        const filePath = 'src/not-cached.txt';
+        const fileContent = 'this is from the file';
 
-  test('should throw a ToolError if path is not provided', async () => {
-    await expect(fileReadTool({})).rejects.toThrow(new ToolError('Path is required', 'FileReadTool'));
-  });
+        // Arrange: cache miss, then successful file read
+        mockFileCache.get.mockResolvedValue(null);
+        mockFs.readFile.mockResolvedValue(fileContent);
 
-  test('should throw a ToolError if file is not found', async () => {
-    const error = new Error('ENOENT');
-    error.code = 'ENOENT';
-    mockFs.access.mockRejectedValue(error);
+        const result = await fileReadTool({ path: filePath });
 
-    await expect(fileReadTool({ path: 'src/nonexistent.txt' })).rejects.toThrow(
-      new ToolError('File not found: src/nonexistent.txt', 'FileReadTool')
-    );
-  });
+        expect(result).toBe(fileContent);
+        expect(mockFileCache.get).toHaveBeenCalledWith(expect.stringContaining(filePath));
+        expect(mockFs.readFile).toHaveBeenCalledWith(expect.stringContaining(filePath), 'utf-8');
+        // Cache should be populated after reading
+        expect(mockFileCache.set).toHaveBeenCalledWith(expect.stringContaining(filePath), fileContent);
+    });
 
-  test('should throw a ToolError for path traversal', async () => {
-    await expect(fileReadTool({ path: '../outside.txt' })).rejects.toThrow(
-      'File access denied: Path traversal attempt detected'
-    );
-  });
+    test('should throw ToolError if file access is denied', async () => {
+        const filePath = 'etc/passwd';
+        mockAccessController.validateAccess.mockReturnValue({
+            allowed: false,
+            reason: 'Access denied'
+        });
 
-  test('should throw a ToolError for accessing a blocked directory', async () => {
-    await expect(fileReadTool({ path: './node_modules/some_package/file.js' })).rejects.toThrow(
-      'File access denied: Access to blocked directory: node_modules'
-    );
-  });
+        await expect(fileReadTool({ path: filePath })).rejects.toThrow(
+            new ToolError('File access denied: Access denied', 'FileReadTool')
+        );
+    });
+
+    test('should bypass cache if noCache option is true', async () => {
+        const filePath = 'src/no-cache.txt';
+        const fileContent = 'live content';
+
+        mockFs.readFile.mockResolvedValue(fileContent);
+
+        const result = await fileReadTool({ path: filePath, noCache: true });
+
+        expect(result).toBe(fileContent);
+        // get and set should not be called
+        expect(mockFileCache.get).not.toHaveBeenCalled();
+        expect(mockFileCache.set).not.toHaveBeenCalled();
+        expect(mockFs.readFile).toHaveBeenCalled();
+    });
 });

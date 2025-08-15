@@ -6,6 +6,7 @@ import { markedTerminal } from 'marked-terminal';
 import { getOllamaClient } from './ollama.js';
 import { getConfig, setConfig, listConfig, setSecurityProfile } from './config.js';
 import { executeToolCommand } from './tools/index.js';
+import { ConversationManager } from './performance/conversationManager.js';
 import { auditLogger } from './security/auditLogger.js';
 import { parseToolCalls } from './utils/parsing.js';
 import { handleError } from './utils/errorHandler.js';
@@ -33,6 +34,9 @@ export async function startREPL(initialQuery, options = {}) {
 
     // Create Ollama client
     const ollama = getOllamaClient();
+    const conversationManager = new ConversationManager({
+        maxTokens: getConfig('maxTokens', 4000)
+    });
 
     // Track token usage
     let totalInputTokens = 0;
@@ -66,6 +70,15 @@ Respond in markdown format. Be concise and helpful.`
     const handleConversationTurn = async (spinner) => {
         try {
             let response = '';
+
+            // Manage conversation context before sending
+            const optimizedConversation = await conversationManager.manageConversation(conversation);
+            if (optimizedConversation.length < conversation.length) {
+                console.log(chalk.gray(`\n(Context optimized to ${optimizedConversation.length} messages)\n`));
+                // Replace the conversation with the optimized version
+                conversation.splice(0, conversation.length, ...optimizedConversation);
+            }
+
             const messages = [systemMessage, ...conversation];
 
             await ollama.chatCompletion({

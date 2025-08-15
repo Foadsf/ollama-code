@@ -2,6 +2,7 @@ import { CodeAnalyzer } from './analyzer.js';
 import { ImprovementProposer } from './proposer.js';
 import { ImprovementValidator } from './validator.js';
 import { ImprovementExecutor } from './executor.js';
+import { progressManager } from '../performance/progressManager.js';
 
 export class SelfImprovementEngine {
     constructor(options = {}) {
@@ -30,58 +31,61 @@ export class SelfImprovementEngine {
         this.isRunning = true;
         this.cycleCount++;
 
-        console.log(`\n🔄 Starting improvement cycle ${this.cycleCount}...`);
+        const operationId = progressManager.createOperation('Running improvement cycle', 4);
 
         try {
             // 1. Analyze current state
-            console.log('📊 Analyzing codebase...');
+            progressManager.updateProgress(operationId, 1, 'Analyzing codebase...');
             const analysis = await this.analyzer.analyzeCodebase();
 
             // 2. Generate improvements
-            console.log('💡 Generating improvement proposals...');
+            progressManager.updateProgress(operationId, 2, 'Generating improvement proposals...');
             const proposals = await this.proposer.proposeImprovements(analysis);
 
             if (proposals.length === 0) {
-                console.log('✨ No improvements needed - codebase is in good shape!');
+                progressManager.completeOperation(operationId, 'No improvements needed - codebase is in good shape!');
                 this.isRunning = false;
                 return { improvements: 0, analysis };
             }
 
             // 3. Process improvements
+            progressManager.updateProgress(operationId, 3, 'Validating and executing proposals...');
             const results = [];
             const maxImprovements = Math.min(proposals.length, this.options.maxImprovementsPerCycle);
 
             for (let i = 0; i < maxImprovements; i++) {
                 const proposal = proposals[i];
-                console.log(`\n🔍 Validating improvement ${i + 1}/${maxImprovements}: ${proposal.description}`);
 
                 const validation = await this.validator.validateImprovement(proposal);
 
                 if (validation.isValid && this.shouldApplyImprovement(proposal, validation)) {
-                    console.log('✅ Applying improvement...');
                     const execution = await this.executor.executeImprovement(proposal, validation);
-
                     if (execution.success) {
                         this.totalImprovements++;
-                        console.log('🎉 Improvement applied successfully!');
                     }
-
                     results.push({ proposal, validation, execution });
                 } else {
-                    console.log('❌ Improvement rejected due to validation issues');
                     results.push({ proposal, validation, execution: null });
                 }
             }
 
+            progressManager.updateProgress(operationId, 4, 'Finalizing cycle...');
+            const improvementsApplied = results.filter(r => r.execution?.success).length;
+            progressManager.completeOperation(operationId, `Cycle complete: ${improvementsApplied} improvements applied.`);
+
             return {
                 cycle: this.cycleCount,
-                improvements: results.filter(r => r.execution?.success).length,
+                improvements: improvementsApplied,
                 total: this.totalImprovements,
                 analysis,
                 results
             };
 
-        } finally {
+        } catch(error) {
+            progressManager.failOperation(operationId, error.message);
+            throw error;
+        }
+        finally {
             this.isRunning = false;
         }
     }

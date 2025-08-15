@@ -194,8 +194,31 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
   ${chalk.blue('/config')} - Manage configuration
   ${chalk.blue('/init')} - Initialize project with a OLLAMA_CODE.md guide
   ${chalk.blue('/models')} - List available Ollama models
+  ${chalk.blue('/improve')} - Run a self-improvement cycle on the codebase
   ${chalk.blue('/exit')} - Exit Ollama Code
   `);
+            break;
+
+        case 'improve':
+            const improvementSpinner = ora('Running self-improvement cycle...').start();
+            try {
+                const { SelfImprovementEngine } = await import('./self-improvement/engine.js');
+                const engine = new SelfImprovementEngine({
+                    autoApprove: args.includes('--auto'),
+                    riskThreshold: args.find(arg => arg.startsWith('--risk='))?.split('=')[1] || 'medium'
+                });
+
+                const result = await engine.runImprovementCycle();
+                improvementSpinner.succeed(`Cycle complete: ${result.improvements} improvements applied`);
+
+                console.log(chalk.blue('\nImprovement Summary:'));
+                console.log(`- Cycle: ${result.cycle}`);
+                console.log(`- Improvements applied: ${result.improvements}`);
+                console.log(`- Total improvements: ${result.total}`);
+
+            } catch (error) {
+                handleError(error, { spinner: improvementSpinner, verbose });
+            }
             break;
 
         case 'clear':

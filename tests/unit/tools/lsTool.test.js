@@ -15,6 +15,14 @@ jest.unstable_mockModule('../../../src/config.js', () => mockConfig);
 const { lsTool } = await import('../../../src/tools/lsTool.js');
 
 describe('lsTool', () => {
+  beforeEach(() => {
+    // Provide a default mock for the security profile
+    mockConfig.getConfig.mockImplementation((key, defaultValue) => {
+        if (key === 'securityProfile') return 'moderate';
+        return defaultValue || [];
+    });
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
@@ -26,12 +34,11 @@ describe('lsTool', () => {
       { name: 'file1.js', isDirectory: () => false },
       { name: 'dir1', isDirectory: () => true },
     ]);
-    mockConfig.getConfig.mockReturnValue([]); // No ignore patterns
 
-    const result = await lsTool({ path: './test' });
+    const result = await lsTool({ path: 'src/' });
 
-    expect(mockFs.stat).toHaveBeenCalledWith(expect.stringContaining('test'));
-    expect(mockFs.readdir).toHaveBeenCalledWith(expect.stringContaining('test'), { withFileTypes: true });
+    expect(mockFs.stat).toHaveBeenCalledWith(expect.stringContaining('src'));
+    expect(mockFs.readdir).toHaveBeenCalledWith(expect.stringContaining('src'), { withFileTypes: true });
     expect(result).toEqual([
       { name: 'file1.js', path: expect.stringContaining('file1.js'), type: 'file', isDirectory: false },
       { name: 'dir1', path: expect.stringContaining('dir1'), type: 'directory', isDirectory: true },
@@ -41,8 +48,8 @@ describe('lsTool', () => {
   test('should throw an error if path is not a directory', async () => {
     mockFs.stat.mockResolvedValue({ isDirectory: () => false });
 
-    await expect(lsTool({ path: './test/file.txt' })).rejects.toThrow(
-      "Not a directory: ./test/file.txt"
+    await expect(lsTool({ path: 'src/file.txt' })).rejects.toThrow(
+      "Not a directory: src/file.txt"
     );
   });
 
@@ -51,8 +58,8 @@ describe('lsTool', () => {
     error.code = 'ENOENT';
     mockFs.stat.mockRejectedValue(error);
 
-    await expect(lsTool({ path: './nonexistent' })).rejects.toThrow(
-        'Directory not found: ./nonexistent'
+    await expect(lsTool({ path: 'src/nonexistent' })).rejects.toThrow(
+        'Directory not found: src/nonexistent'
     );
   });
 });

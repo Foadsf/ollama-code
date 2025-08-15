@@ -1,5 +1,6 @@
 import { jest } from '@jest/globals';
 
+// Mock dependencies before any other imports
 const mockFs = {
   access: jest.fn(),
   readFile: jest.fn(),
@@ -11,11 +12,20 @@ const mockConfig = {
 };
 jest.unstable_mockModule('../../../src/config.js', () => mockConfig);
 
+
 // The module under test must be imported AFTER mocking
 const { fileReadTool } = await import('../../../src/tools/fileReadTool.js');
 const { ToolError } = await import('../../../src/utils/errors.js');
 
 describe('fileReadTool', () => {
+  beforeEach(() => {
+    // Provide a default mock for the security profile and other configs
+    mockConfig.getConfig.mockImplementation((key, defaultValue) => {
+        if (key === 'securityProfile') return 'moderate';
+        return defaultValue || [];
+    });
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
@@ -24,12 +34,12 @@ describe('fileReadTool', () => {
     const fileContent = 'Hello, world!';
     mockFs.access.mockResolvedValue(undefined);
     mockFs.readFile.mockResolvedValue(fileContent);
-    mockConfig.getConfig.mockReturnValue([]);
 
-    const result = await fileReadTool({ path: './test.txt' });
+    // Test a path that is allowed in moderate mode
+    const result = await fileReadTool({ path: 'src/test.txt' });
 
-    expect(mockFs.access).toHaveBeenCalledWith(expect.stringContaining('test.txt'));
-    expect(mockFs.readFile).toHaveBeenCalledWith(expect.stringContaining('test.txt'), 'utf-8');
+    expect(mockFs.access).toHaveBeenCalledWith(expect.stringContaining('src/test.txt'));
+    expect(mockFs.readFile).toHaveBeenCalledWith(expect.stringContaining('src/test.txt'), 'utf-8');
     expect(result).toBe(fileContent);
   });
 
@@ -42,23 +52,20 @@ describe('fileReadTool', () => {
     error.code = 'ENOENT';
     mockFs.access.mockRejectedValue(error);
 
-    await expect(fileReadTool({ path: './nonexistent.txt' })).rejects.toThrow(
-      new ToolError('File not found: ./nonexistent.txt', 'FileReadTool')
+    await expect(fileReadTool({ path: 'src/nonexistent.txt' })).rejects.toThrow(
+      new ToolError('File not found: src/nonexistent.txt', 'FileReadTool')
     );
   });
 
-  test('should throw a ToolError if path is outside the project directory', async () => {
-    // This test doesn't need fs mocks as it should fail before calling fs
+  test('should throw a ToolError for path traversal', async () => {
     await expect(fileReadTool({ path: '../outside.txt' })).rejects.toThrow(
-      new ToolError('Cannot read files outside the project directory', 'FileReadTool')
+      'File access denied: Path traversal attempt detected'
     );
   });
 
-    test('should throw a ToolError if path matches an ignore pattern', async () => {
-    mockConfig.getConfig.mockReturnValue(['node_modules']);
-
+  test('should throw a ToolError for accessing a blocked directory', async () => {
     await expect(fileReadTool({ path: './node_modules/some_package/file.js' })).rejects.toThrow(
-      new ToolError('Path matches ignore pattern: node_modules', 'FileReadTool')
+      'File access denied: Access to blocked directory: node_modules'
     );
   });
 });

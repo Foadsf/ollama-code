@@ -1,6 +1,8 @@
 import * as fs from 'fs/promises';
 import path from 'path';
 import { getConfig } from '../config.js';
+import { ToolError } from '../utils/errors.js';
+import { FileAccessController } from '../security/fileAccessController.js';
 
 /**
  * Tool for listing directory contents
@@ -11,20 +13,25 @@ import { getConfig } from '../config.js';
  * @returns {Promise<Array>} - Directory contents
  */
 export async function lsTool(args) {
-    const dirPath = args.path ? path.resolve(process.cwd(), args.path) : process.cwd();
+    const toolName = 'LSTool';
+    const dirPath = args.path || '.';
+
+    // Validate file access
+    const controller = new FileAccessController();
+    const accessResult = controller.validateAccess('read', dirPath);
+    if (!accessResult.allowed) {
+        throw new ToolError(`Directory access denied: ${accessResult.reason}`, toolName);
+    }
+
+    const resolvedPath = path.resolve(process.cwd(), dirPath);
     const recursive = args.recursive || false;
     const showHidden = args.showHidden || false;
 
-    // Check if path is within the project directory
-    if (!dirPath.startsWith(process.cwd())) {
-        throw new Error('Cannot list directories outside the project directory');
-    }
-
     try {
         // Check if directory exists
-        const stats = await fs.stat(dirPath);
+        const stats = await fs.stat(resolvedPath);
         if (!stats.isDirectory()) {
-            throw new Error(`Not a directory: ${args.path}`);
+            throw new ToolError(`Not a directory: ${args.path}`, toolName);
         }
 
         // Get ignore patterns
@@ -32,15 +39,16 @@ export async function lsTool(args) {
 
         // List directory contents
         if (recursive) {
-            return await listRecursive(dirPath, showHidden, ignorePatterns);
+            return await listRecursive(resolvedPath, showHidden, ignorePatterns);
         } else {
-            return await listDirectory(dirPath, showHidden, ignorePatterns);
+            return await listDirectory(resolvedPath, showHidden, ignorePatterns);
         }
     } catch (error) {
+        if (error instanceof ToolError) throw error;
         if (error.code === 'ENOENT') {
-            throw new Error(`Directory not found: ${args.path}`);
+            throw new ToolError(`Directory not found: ${args.path}`, toolName);
         }
-        throw new Error(`Failed to list directory: ${error.message}`);
+        throw new ToolError(`Failed to list directory: ${error.message}`, toolName);
     }
 }
 

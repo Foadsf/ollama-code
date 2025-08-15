@@ -1,6 +1,7 @@
 import { getConfig } from '../config.js';
 import { checkPermission } from '../permissions.js';
 import { ToolError, PermissionError } from '../utils/errors.js';
+import { auditLogger } from '../security/auditLogger.js';
 
 // Import tool implementations
 import { fileReadTool } from './fileReadTool.js';
@@ -98,8 +99,11 @@ export async function executeToolCommand(toolCall) {
 
     // Execute the tool
     try {
-        return await tool.handler(args);
+        const result = await tool.handler(args);
+        auditLogger.logToolExecution(name, args, { success: true, result });
+        return result;
     } catch (error) {
+        auditLogger.logToolExecution(name, args, { success: false, error: error.message });
         // Re-throw as a ToolError to add context, unless it already is one
         if (error instanceof ToolError) {
             throw error;

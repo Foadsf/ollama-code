@@ -1,6 +1,8 @@
 import { globby } from 'globby';
 import path from 'path';
 import { getConfig } from '../config.js';
+import { ToolError } from '../utils/errors.js';
+import { FileAccessController } from '../security/fileAccessController.js';
 
 /**
  * Tool for finding files matching a glob pattern
@@ -11,8 +13,9 @@ import { getConfig } from '../config.js';
  * @returns {Promise<Array<string>>} - Matching file paths
  */
 export async function globTool(args) {
+    const toolName = 'GlobTool';
     if (!args.pattern) {
-        throw new Error('Pattern is required');
+        throw new ToolError('Pattern is required', toolName);
     }
 
     const includeHidden = args.includeHidden || false;
@@ -33,9 +36,19 @@ export async function globTool(args) {
         // Find matching files
         const files = await globby(args.pattern, options);
 
-        // Convert absolute paths to relative
-        return files.map(file => path.normalize(file));
+        // Post-filter results based on security policy
+        const controller = new FileAccessController();
+        const allowedFiles = [];
+        for (const file of files) {
+            const normalizedPath = path.normalize(file);
+            const accessResult = controller.validateAccess('read', normalizedPath);
+            if (accessResult.allowed) {
+                allowedFiles.push(normalizedPath);
+            }
+        }
+
+        return allowedFiles;
     } catch (error) {
-        throw new Error(`Failed to find files: ${error.message}`);
+        throw new ToolError(`Failed to find files: ${error.message}`, toolName);
     }
 }

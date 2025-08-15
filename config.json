@@ -1,0 +1,5 @@
+{
+	"bashToolProfile": "strict",
+	"securityProfile": "strict",
+	"auditLogging": true
+}

@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { ToolError } from '../utils/errors.js';
+import { FileAccessController } from '../security/fileAccessController.js';
 
 /**
  * Tool for editing existing files
@@ -23,13 +24,14 @@ export async function fileEditTool(args) {
         throw new ToolError('Either oldContent/newContent pair or startLine/endLine pair is required', toolName);
     }
 
-    // Normalize and resolve the path
-    const filePath = path.resolve(process.cwd(), args.path);
-
-    // Check if path is within the project directory
-    if (!filePath.startsWith(process.cwd())) {
-        throw new ToolError('Cannot edit files outside the project directory', toolName);
+    // Validate file access
+    const controller = new FileAccessController();
+    const accessResult = controller.validateAccess('edit', args.path, { content: args.newContent });
+     if (!accessResult.allowed) {
+        throw new ToolError(`File access denied: ${accessResult.reason}`, toolName);
     }
+
+    const filePath = path.resolve(process.cwd(), args.path);
 
     try {
         // Check if file exists

@@ -4,8 +4,9 @@ import ora from 'ora';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import { getOllamaClient } from './ollama.js';
-import { getConfig } from './config.js';
+import { getConfig, setConfig, listConfig, setSecurityProfile } from './config.js';
 import { executeToolCommand } from './tools/index.js';
+import { auditLogger } from './security/auditLogger.js';
 import { parseToolCalls } from './utils/parsing.js';
 import { handleError } from './utils/errorHandler.js';
 
@@ -195,8 +196,52 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
   ${chalk.blue('/init')} - Initialize project with a OLLAMA_CODE.md guide
   ${chalk.blue('/models')} - List available Ollama models
   ${chalk.blue('/improve')} - Run a self-improvement cycle on the codebase
+  ${chalk.blue('/security')} - Manage security settings
   ${chalk.blue('/exit')} - Exit Ollama Code
   `);
+            break;
+
+        case 'security':
+            const subCmd = args[0] || 'status';
+            const subArgs = args.slice(1);
+
+            switch (subCmd) {
+                case 'profile':
+                    const profileName = subArgs[0];
+                    if (['strict', 'moderate', 'permissive'].includes(profileName)) {
+                        try {
+                            setSecurityProfile(profileName);
+                            console.log(chalk.green(`Security profile set to: ${profileName}`));
+                        } catch (error) {
+                            handleError(error, { spinner: null, verbose });
+                        }
+                    } else {
+                        console.log(chalk.yellow(`Invalid profile. Available profiles: strict, moderate, permissive.`));
+                        console.log(chalk.gray(`Current profile: ${getConfig('securityProfile', 'moderate')}`));
+                    }
+                    break;
+                case 'status':
+                    const currentProfile = getConfig('securityProfile', 'moderate');
+                    console.log(chalk.bold('\nSecurity Status:'));
+                    console.log(`- Current Profile: ${chalk.blue(currentProfile)}`);
+                    break;
+                case 'audit':
+                    const hours = parseInt(subArgs[0] || '24', 10);
+                    const summary = await auditLogger.getAuditSummary(hours);
+                    console.log(chalk.bold(`\nAudit Log Summary (Last ${hours} hours):`));
+                    if (summary.error) {
+                        console.log(chalk.red(`Could not read audit log: ${summary.error}`));
+                    } else {
+                        console.log(`- Total Events: ${summary.totalEvents}`);
+                        console.log(`- Tool Executions: ${summary.toolExecutions}`);
+                        console.log(`- Security Events: ${summary.securityEvents}`);
+                        console.log(`- Permission Requests: ${summary.permissionRequests}`);
+                        console.log(`- Risk Distribution: ${JSON.stringify(summary.riskDistribution)}`);
+                    }
+                    break;
+                default:
+                    console.log(chalk.yellow('Unknown security command. Available commands: /security status, /security profile [name], /security audit [hours]'));
+            }
             break;
 
         case 'improve':

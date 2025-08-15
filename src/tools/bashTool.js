@@ -1,17 +1,12 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import chalk from 'chalk';
 import { getConfig } from '../config.js';
 import { ToolError } from '../utils/errors.js';
+import { CommandSanitizer } from '../security/commandSanitizer.js';
 
 // Promisify exec
 const execAsync = promisify(exec);
-
-// List of potentially dangerous commands that should be blocked
-const BLOCKED_COMMANDS = [
-    'rm -rf /', 'rm -rf *', 'rm -rf ~',
-    'wget', 'curl', 'nc', 'ncat', 'netcat',
-    '>>', '>', '|', ';', '&&', '||', '&'
-];
 
 /**
  * Tool for executing shell commands
@@ -28,19 +23,30 @@ export async function bashTool(args) {
     }
 
     const command = args.command.trim();
+
+    // Sanitize the command using the new security controller
+    const securityProfile = getConfig('bashToolProfile', 'moderate');
+    const sanitizer = new CommandSanitizer(securityProfile);
+    const validationResult = sanitizer.sanitizeCommand(command);
+
+    if (validationResult.blocked) {
+        throw new ToolError(`Command blocked by security policy: ${validationResult.reason}`, toolName);
+    }
+
+    // For now, we will just warn about approval. The permission system will handle it later.
+    if (validationResult.warnings.length > 0) {
+        console.warn(chalk.yellow(`Security warnings for command "${command}":`));
+        validationResult.warnings.forEach(w => console.warn(chalk.yellow(`- ${w}`)));
+    }
+
     const cwd = args.cwd ? args.cwd : process.cwd();
     const timeout = args.timeout || 30000; // Default 30s timeout
-
-    // Security check
-    if (isCommandDangerous(command)) {
-        throw new ToolError('Command contains potentially dangerous operations and is blocked for security reasons', toolName);
-    }
 
     try {
         const { stdout, stderr } = await execAsync(command, {
             cwd,
             timeout,
-            shell: true
+            shell: true // Be aware, shell:true can be a security risk if not sanitized.
         });
 
         if (stderr) {
@@ -51,34 +57,4 @@ export async function bashTool(args) {
     } catch (error) {
         throw new ToolError(`Command execution failed: ${error.message}`, toolName);
     }
-}
-
-/**
- * Check if a command contains potentially dangerous operations
- * @param {string} command - Command to check
- * @returns {boolean} - Whether the command is dangerous
- */
-function isCommandDangerous(command) {
-    // Check against the blocked command list
-    for (const blocked of BLOCKED_COMMANDS) {
-        if (command.includes(blocked)) {
-            return true;
-        }
-    }
-
-    // Restrict certain commands with arguments that might be dangerous
-    if (command.match(/^rm\s+(-r|-rf|--recursive|--force|-f)/)) {
-        // Allow rm -rf in specific directories only
-        if (command.match(/^rm\s+(-r|-rf|--recursive|--force|-f).*\//)) {
-            return true;
-        }
-    }
-
-    // Check for curl/wget commands that might download and execute code
-    if ((command.startsWith('curl') || command.startsWith('wget')) &&
-        (command.includes('| bash') || command.includes('| sh'))) {
-        return true;
-    }
-
-    return false;
 }

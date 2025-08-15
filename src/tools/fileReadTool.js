@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import path from 'path';
 import { getConfig } from '../config.js';
 import { ToolError } from '../utils/errors.js';
+import { FileAccessController } from '../security/fileAccessController.js';
 
 /**
  * Tool for reading file contents
@@ -15,22 +16,14 @@ export async function fileReadTool(args) {
         throw new ToolError('Path is required', toolName);
     }
 
-    // Normalize and resolve the path
+    // Validate file access
+    const controller = new FileAccessController();
+    const accessResult = controller.validateAccess('read', args.path);
+    if (!accessResult.allowed) {
+        throw new ToolError(`File access denied: ${accessResult.reason}`, toolName);
+    }
+
     const filePath = path.resolve(process.cwd(), args.path);
-
-    // Check if path is within the project directory
-    if (!filePath.startsWith(process.cwd())) {
-        throw new ToolError('Cannot read files outside the project directory', toolName);
-    }
-
-    // Check ignore patterns
-    const ignorePatterns = getConfig('ignorePatterns') || [];
-    for (const pattern of ignorePatterns) {
-        // Simple glob matching for ignored paths
-        if (filePath.includes(pattern.replace(/\*/g, ''))) {
-            throw new ToolError(`Path matches ignore pattern: ${pattern}`, toolName);
-        }
-    }
 
     try {
         // Check if file exists

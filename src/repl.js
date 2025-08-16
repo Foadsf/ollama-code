@@ -4,15 +4,10 @@ import ora from 'ora';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import { getOllamaClient } from './ollama.js';
-import { getConfig, setConfig, listConfig, setSecurityProfile } from './config.js';
+import { getConfig } from './config.js';
 import { executeToolCommand } from './tools/index.js';
-import { ConversationManager } from './performance/conversationManager.js';
-import { auditLogger } from './security/auditLogger.js';
 import { parseToolCalls } from './utils/parsing.js';
 import { handleError } from './utils/errorHandler.js';
-import { systemMonitor } from './diagnostics/monitor.js';
-import { updateManager } from './updates/updateNotifier.js';
-import { fileWriteTool } from './tools/fileWriteTool.js';
 
 // Configure marked to render markdown in the terminal
 marked.use(markedTerminal());
@@ -23,9 +18,6 @@ marked.use(markedTerminal());
  * @param {Object} options - REPL options
  */
 export async function startREPL(initialQuery, options = {}) {
-    // Initialize update manager
-    updateManager.initialize().then(() => updateManager.checkForUpdates());
-
     const conversation = [];
     const verbose = options.verbose || getConfig('verbose');
     const print = options.print || false;
@@ -40,9 +32,6 @@ export async function startREPL(initialQuery, options = {}) {
 
     // Create Ollama client
     const ollama = getOllamaClient();
-    const conversationManager = new ConversationManager({
-        maxTokens: getConfig('maxTokens', 4000)
-    });
 
     // Track token usage
     let totalInputTokens = 0;
@@ -72,20 +61,29 @@ The user is currently in the directory: ${process.cwd()}
 Respond in markdown format. Be concise and helpful.`
     };
 
-    // Main conversation processing loop
-    const handleConversationTurn = async (spinner) => {
+    // Process a user query and get response
+    const processQuery = async (query) => {
+        if (!query.trim()) {
+            return;
+        }
+
+        // Handle slash commands
+        if (query.startsWith('/')) {
+            await handleSlashCommand(query, { rl, conversation, ollama });
+            return;
+        }
+
+        // Add user message to conversation
+        conversation.push({ role: 'user', content: query });
+
+        // Prepare messages for the API (including system message)
+        const messages = [systemMessage, ...conversation];
+
+        // Create a spinner for loading indication
+        const spinner = ora('Thinking...').start();
+
         try {
             let response = '';
-
-            // Manage conversation context before sending
-            const optimizedConversation = await conversationManager.manageConversation(conversation);
-            if (optimizedConversation.length < conversation.length) {
-                console.log(chalk.gray(`\n(Context optimized to ${optimizedConversation.length} messages)\n`));
-                // Replace the conversation with the optimized version
-                conversation.splice(0, conversation.length, ...optimizedConversation);
-            }
-
-            const messages = [systemMessage, ...conversation];
 
             await ollama.chatCompletion({
                 messages,
@@ -120,8 +118,7 @@ Respond in markdown format. Be concise and helpful.`
                         console.log(chalk.dim(`\nTool result received. Continuing conversation...\n`));
 
                         // Get further instructions from the model
-                        await handleConversationTurn(ora('Getting next steps...').start());
-
+                        await processFollowup();
                     } catch (error) {
                         handleError(error, { spinner: toolSpinner, verbose });
                         conversation.push({
@@ -130,40 +127,77 @@ Respond in markdown format. Be concise and helpful.`
                         });
 
                         // Get further instructions from the model
-                        await handleConversationTurn(ora('Getting next steps...').start());
+                        await processFollowup();
                     }
                 }
             }
         } catch (error) {
             handleError(error, { spinner, verbose });
         }
-    };
 
-    // Process a user query and get response
-    const processQuery = async (query) => {
-        if (!query.trim()) {
-            return;
-        }
-
-        // Handle slash commands
-        if (query.startsWith('/')) {
-            await handleSlashCommand(query, { rl, conversation, ollama, verbose });
-            if (!print) rl.prompt();
-            return;
-        }
-
-        // Add user message to conversation
-        conversation.push({ role: 'user', content: query });
-
-        // Start the conversation turn
-        const spinner = ora('Thinking...').start();
-        await handleConversationTurn(spinner);
-
-        // Exit if in print mode, otherwise prompt for next input
+        // Exit if in print mode
         if (print) {
             process.exit(0);
         } else {
             rl.prompt();
+        }
+    };
+
+    // Process a follow-up after tool execution
+    const processFollowup = async () => {
+        const spinner = ora('Getting next steps...').start();
+
+        try {
+            let response = '';
+
+            await ollama.chatCompletion({
+                messages: [systemMessage, ...conversation],
+                onProgress: (content) => {
+                    response = content;
+                    spinner.text = 'Receiving response...';
+                },
+            });
+
+            spinner.succeed('Response received');
+            console.log('\n' + marked(response) + '\n');
+
+            // Add assistant response to conversation
+            conversation.push({ role: 'assistant', content: response });
+
+            // Parse and execute any additional tool calls
+            const toolCalls = parseToolCalls(response);
+            if (toolCalls.length > 0) {
+                for (const toolCall of toolCalls) {
+                    const toolSpinner = ora(`Executing tool: ${toolCall.name}`).start();
+                    try {
+                        const result = await executeToolCommand(toolCall);
+                        toolSpinner.succeed(`Tool ${toolCall.name} executed`);
+
+                        // Add tool result to conversation
+                        conversation.push({
+                            role: 'user',
+                            content: `Tool result for ${toolCall.name}:\n\`\`\`\n${typeof result === 'object' ? JSON.stringify(result, null, 2) : result
+                                }\n\`\`\``
+                        });
+
+                        console.log(chalk.dim(`\nTool result received. Continuing conversation...\n`));
+
+                        // Recursive call to get further instructions
+                        await processFollowup();
+                    } catch (error) {
+                        handleError(error, { spinner: toolSpinner, verbose });
+                        conversation.push({
+                            role: 'user',
+                            content: `Tool ${error.toolName || toolCall.name} failed with error: ${error.message}`
+                        });
+
+                        // Recursive call to get further instructions
+                        await processFollowup();
+                    }
+                }
+            }
+        } catch (error) {
+            handleError(error, { spinner, verbose });
         }
     };
 
@@ -198,15 +232,6 @@ Respond in markdown format. Be concise and helpful.`
  * @param {string} command - The slash command
  * @param {Object} context - REPL context
  */
-function getStatusIcon(status) {
-    switch (status) {
-        case 'healthy': return '✅';
-        case 'warning': return '⚠️';
-        case 'error': return '❌';
-        default: return '❓';
-    }
-}
-
 async function handleSlashCommand(command, { rl, conversation, ollama, verbose }) {
     const parts = command.slice(1).split(' ');
     const cmd = parts[0];
@@ -223,164 +248,8 @@ async function handleSlashCommand(command, { rl, conversation, ollama, verbose }
   ${chalk.blue('/config')} - Manage configuration
   ${chalk.blue('/init')} - Initialize project with a OLLAMA_CODE.md guide
   ${chalk.blue('/models')} - List available Ollama models
-  ${chalk.blue('/improve')} - Run a self-improvement cycle on the codebase
-  ${chalk.blue('/security')} - Manage security settings
-  ${chalk.blue('/health')} - Run a system health check
-  ${chalk.blue('/diagnostics')} - Generate a diagnostic report
-  ${chalk.blue('/performance')} - Run performance checks
-  ${chalk.blue('/update')} - Check for updates
   ${chalk.blue('/exit')} - Exit Ollama Code
   `);
-            break;
-
-        case 'health':
-            const healthSpinner = ora('Running health check...').start();
-            try {
-                const healthReport = await systemMonitor.performHealthCheck();
-                healthSpinner.succeed(`Health check complete: ${healthReport.overall}`);
-
-                console.log(chalk.bold('\n🏥 System Health Report:'));
-                console.log(`Overall Status: ${getStatusIcon(healthReport.overall)} ${healthReport.overall.toUpperCase()}`);
-
-                Object.entries(healthReport.checks).forEach(([component, check]) => {
-                    console.log(`${component}: ${getStatusIcon(check.status)} ${check.status}`);
-                    if (check.issues?.length > 0) {
-                        check.issues.forEach(issue => console.log(`  ❌ ${issue}`));
-                    }
-                });
-
-                if (healthReport.recommendations?.length > 0) {
-                    console.log(chalk.bold('\n💡 Recommendations:'));
-                    healthReport.recommendations.forEach(rec => {
-                        console.log(`${rec.priority === 'high' ? '🔴' : rec.priority === 'medium' ? '🟡' : '🟢'} ${rec.title}`);
-                        console.log(`   ${rec.description}`);
-                        if (rec.action) console.log(`   ${chalk.cyan(rec.action)}`);
-                    });
-                }
-
-            } catch (error) {
-                handleError(error, { spinner: healthSpinner, verbose });
-            }
-            break;
-
-        case 'diagnostics':
-            const diagSpinner = ora('Generating diagnostic report...').start();
-            try {
-                const report = await systemMonitor.generateDiagnosticReport();
-                diagSpinner.succeed('Diagnostic report generated');
-
-                console.log(chalk.bold('\n📋 Diagnostic Report:'));
-                console.log(`Timestamp: ${report.timestamp}`);
-                console.log(`Version: ${report.version}`);
-                console.log(`Platform: ${report.environment.platform} ${report.environment.arch}`);
-                console.log(`Node.js: ${report.environment.nodeVersion}`);
-                console.log(`Uptime: ${Math.round(report.environment.uptime)}s`);
-
-                const reportFile = `olc-diagnostic-${Date.now()}.json`;
-                await fileWriteTool({ path: reportFile, content: JSON.stringify(report, null, 2) });
-                console.log(`\nDetailed report saved to: ${reportFile}`);
-
-            } catch (error) {
-                handleError(error, { spinner: diagSpinner, verbose });
-            }
-            break;
-
-        case 'performance':
-            if (args[0] === 'profile') {
-                const perfSpinner = ora('Running performance profile...').start();
-                try {
-                    const profile = await systemMonitor.performanceProfile();
-                    perfSpinner.succeed('Performance profiling complete');
-
-                    console.log(chalk.bold('\n⚡ Performance Profile:'));
-                    profile.tests.forEach(test => {
-                        console.log(`\n${test.name}:`);
-                        if (test.error) {
-                            console.log(`  ❌ Error: ${test.error}`);
-                        } else {
-                            Object.entries(test.metrics).forEach(([metric, value]) => {
-                                console.log(`  ${metric}: ${value}${metric.includes('Time') ? 'ms' : ''}`);
-                            });
-                        }
-                    });
-
-                } catch (error) {
-                    handleError(error, { spinner: perfSpinner, verbose });
-                }
-            }
-            break;
-
-        case 'update':
-            try {
-                await updateManager.showUpdateInfo();
-            } catch (error) {
-                console.error('Update check failed:', error.message);
-            }
-            break;
-
-        case 'security':
-            const subCmd = args[0] || 'status';
-            const subArgs = args.slice(1);
-
-            switch (subCmd) {
-                case 'profile':
-                    const profileName = subArgs[0];
-                    if (['strict', 'moderate', 'permissive'].includes(profileName)) {
-                        try {
-                            setSecurityProfile(profileName);
-                            console.log(chalk.green(`Security profile set to: ${profileName}`));
-                        } catch (error) {
-                            handleError(error, { spinner: null, verbose });
-                        }
-                    } else {
-                        console.log(chalk.yellow(`Invalid profile. Available profiles: strict, moderate, permissive.`));
-                        console.log(chalk.gray(`Current profile: ${getConfig('securityProfile', 'moderate')}`));
-                    }
-                    break;
-                case 'status':
-                    const currentProfile = getConfig('securityProfile', 'moderate');
-                    console.log(chalk.bold('\nSecurity Status:'));
-                    console.log(`- Current Profile: ${chalk.blue(currentProfile)}`);
-                    break;
-                case 'audit':
-                    const hours = parseInt(subArgs[0] || '24', 10);
-                    const summary = await auditLogger.getAuditSummary(hours);
-                    console.log(chalk.bold(`\nAudit Log Summary (Last ${hours} hours):`));
-                    if (summary.error) {
-                        console.log(chalk.red(`Could not read audit log: ${summary.error}`));
-                    } else {
-                        console.log(`- Total Events: ${summary.totalEvents}`);
-                        console.log(`- Tool Executions: ${summary.toolExecutions}`);
-                        console.log(`- Security Events: ${summary.securityEvents}`);
-                        console.log(`- Permission Requests: ${summary.permissionRequests}`);
-                        console.log(`- Risk Distribution: ${JSON.stringify(summary.riskDistribution)}`);
-                    }
-                    break;
-                default:
-                    console.log(chalk.yellow('Unknown security command. Available commands: /security status, /security profile [name], /security audit [hours]'));
-            }
-            break;
-
-        case 'improve':
-            const improvementSpinner = ora('Running self-improvement cycle...').start();
-            try {
-                const { SelfImprovementEngine } = await import('./self-improvement/engine.js');
-                const engine = new SelfImprovementEngine({
-                    autoApprove: args.includes('--auto'),
-                    riskThreshold: args.find(arg => arg.startsWith('--risk='))?.split('=')[1] || 'medium'
-                });
-
-                const result = await engine.runImprovementCycle();
-                improvementSpinner.succeed(`Cycle complete: ${result.improvements} improvements applied`);
-
-                console.log(chalk.blue('\nImprovement Summary:'));
-                console.log(`- Cycle: ${result.cycle}`);
-                console.log(`- Improvements applied: ${result.improvements}`);
-                console.log(`- Total improvements: ${result.total}`);
-
-            } catch (error) {
-                handleError(error, { spinner: improvementSpinner, verbose });
-            }
             break;
 
         case 'clear':

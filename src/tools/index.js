@@ -1,7 +1,5 @@
 import { getConfig } from '../config.js';
 import { checkPermission } from '../permissions.js';
-import { ToolError, PermissionError } from '../utils/errors.js';
-import { auditLogger } from '../security/auditLogger.js';
 
 // Import tool implementations
 import { fileReadTool } from './fileReadTool.js';
@@ -12,8 +10,6 @@ import { grepTool } from './grepTool.js';
 import { globTool } from './globTool.js';
 import { bashTool } from './bashTool.js';
 import { gitTool } from './gitTool.js';
-import { packageManagerTool } from './packageManagerTool.js';
-import { databaseTool } from './databaseTool.js';
 
 // Register all tools and their handlers
 const toolRegistry = {
@@ -56,16 +52,6 @@ const toolRegistry = {
         handler: gitTool,
         requiresPermission: true,
         description: 'Performs Git operations'
-    },
-    'PackageManagerTool': {
-        handler: packageManagerTool,
-        requiresPermission: true,
-        description: 'Manages project dependencies (npm, yarn, pnpm)'
-    },
-    'DatabaseTool': {
-        handler: databaseTool,
-        requiresPermission: true,
-        description: 'Executes queries on databases (SQLite, PostgreSQL)'
     }
 };
 
@@ -79,7 +65,7 @@ export async function executeToolCommand(toolCall) {
 
     // Check if tool exists
     if (!toolRegistry[name]) {
-        throw new ToolError(`Unknown tool: ${name}`, name);
+        throw new Error(`Unknown tool: ${name}`);
     }
 
     const tool = toolRegistry[name];
@@ -104,23 +90,16 @@ export async function executeToolCommand(toolCall) {
             // Request permission from user
             const granted = await checkPermission(name, args);
             if (!granted) {
-                throw new PermissionError(`Execution of tool '${name}' was denied.`);
+                throw new Error(`Permission denied for ${name}`);
             }
         }
     }
 
     // Execute the tool
     try {
-        const result = await tool.handler(args);
-        auditLogger.logToolExecution(name, args, { success: true, result });
-        return result;
+        return await tool.handler(args);
     } catch (error) {
-        auditLogger.logToolExecution(name, args, { success: false, error: error.message });
-        // Re-throw as a ToolError to add context, unless it already is one
-        if (error instanceof ToolError) {
-            throw error;
-        }
-        throw new ToolError(error.message, name);
+        throw new Error(`Error executing ${name}: ${error.message}`);
     }
 }
 

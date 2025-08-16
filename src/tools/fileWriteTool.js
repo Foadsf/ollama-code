@@ -1,8 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getConfig } from '../config.js';
-import { ToolError } from '../utils/errors.js';
-import { FileAccessController } from '../security/fileAccessController.js';
 
 /**
  * Tool for creating or overwriting files
@@ -13,23 +11,30 @@ import { FileAccessController } from '../security/fileAccessController.js';
  * @returns {Promise<string>} - Success message
  */
 export async function fileWriteTool(args) {
-    const toolName = 'FileWriteTool';
     if (!args.path) {
-        throw new ToolError('Path is required', toolName);
+        throw new Error('Path is required');
     }
 
     if (args.content === undefined) {
-        throw new ToolError('Content is required', toolName);
+        throw new Error('Content is required');
     }
 
-    // Validate file access
-    const controller = new FileAccessController();
-    const accessResult = controller.validateAccess('write', args.path, { content: args.content });
-    if (!accessResult.allowed) {
-        throw new ToolError(`File access denied: ${accessResult.reason}`, toolName);
-    }
-
+    // Normalize and resolve the path
     const filePath = path.resolve(process.cwd(), args.path);
+
+    // Check if path is within the project directory
+    if (!filePath.startsWith(process.cwd())) {
+        throw new Error('Cannot write files outside the project directory');
+    }
+
+    // Check ignore patterns
+    const ignorePatterns = getConfig('ignorePatterns') || [];
+    for (const pattern of ignorePatterns) {
+        // Simple glob matching for ignored paths
+        if (filePath.includes(pattern.replace(/\*/g, ''))) {
+            throw new Error(`Path matches ignore pattern: ${pattern}`);
+        }
+    }
 
     try {
         // Create directory if it doesn't exist
@@ -45,6 +50,6 @@ export async function fileWriteTool(args) {
             return `File ${args.path} created successfully`;
         }
     } catch (error) {
-        throw new ToolError(`Failed to write file: ${error.message}`, toolName);
+        throw new Error(`Failed to write file: ${error.message}`);
     }
 }

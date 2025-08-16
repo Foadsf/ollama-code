@@ -1,7 +1,6 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { addToConfig } from './config.js';
-import { auditLogger } from './security/auditLogger.js';
 
 // Track permissions granted for the current session
 const sessionPermissions = new Set();
@@ -76,10 +75,6 @@ export async function checkPermission(toolName, args) {
             when: (answers) => answers.permission,
         },
     ]);
-
-    // Log the permission request and outcome
-    const permanent = remember === 'project';
-    auditLogger.logPermissionRequest(toolName, args, permission, permanent);
 
     if (permission) {
         // Handle remembering the permission

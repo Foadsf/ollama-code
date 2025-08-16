@@ -1,55 +1,47 @@
-import * as fs from 'fs/promises';
+import fs from 'fs/promises';
 import path from 'path';
-import { ToolError } from '../utils/errors.js';
-import { FileAccessController } from '../security/fileAccessController.js';
-import { FileCache } from '../performance/fileCache.js';
-
-// Create a singleton cache instance for the file read tool
-const fileCache = new FileCache();
+import { getConfig } from '../config.js';
 
 /**
- * Tool for reading file contents, with caching.
+ * Tool for reading file contents
  * @param {Object} args - Tool arguments
  * @param {string} args.path - Path to the file
- * @param {boolean} [args.noCache=false] - Whether to bypass the cache
  * @returns {Promise<string>} - File contents
  */
 export async function fileReadTool(args) {
-    const toolName = 'FileReadTool';
     if (!args.path) {
-        throw new ToolError('Path is required', toolName);
+        throw new Error('Path is required');
     }
 
-    // Validate file access first
-    const controller = new FileAccessController();
-    const accessResult = controller.validateAccess('read', args.path);
-    if (!accessResult.allowed) {
-        throw new ToolError(`File access denied: ${accessResult.reason}`, toolName);
-    }
-
+    // Normalize and resolve the path
     const filePath = path.resolve(process.cwd(), args.path);
 
-    // Try cache first
-    if (!args.noCache) {
-        const cachedContent = await fileCache.get(filePath);
-        if (cachedContent !== null) {
-            return cachedContent;
+    // Check if path is within the project directory
+    if (!filePath.startsWith(process.cwd())) {
+        throw new Error('Cannot read files outside the project directory');
+    }
+
+    // Check ignore patterns
+    const ignorePatterns = getConfig('ignorePatterns') || [];
+    for (const pattern of ignorePatterns) {
+        // Simple glob matching for ignored paths
+        if (filePath.includes(pattern.replace(/\*/g, ''))) {
+            throw new Error(`Path matches ignore pattern: ${pattern}`);
         }
     }
 
     try {
-        const content = await fs.readFile(filePath, 'utf-8');
+        // Check if file exists
+        await fs.access(filePath);
 
-        // Cache the content for future reads
-        if (!args.noCache) {
-            await fileCache.set(filePath, content);
-        }
+        // Read file
+        const content = await fs.readFile(filePath, 'utf-8');
 
         return content;
     } catch (error) {
         if (error.code === 'ENOENT') {
-            throw new ToolError(`File not found: ${args.path}`, toolName);
+            throw new Error(`File not found: ${args.path}`);
         }
-        throw new ToolError(`Failed to read file: ${error.message}`, toolName);
+        throw new Error(`Failed to read file: ${error.message}`);
     }
 }

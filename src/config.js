@@ -2,7 +2,6 @@ import Conf from 'conf';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { getSecurityProfile as getSecProfile, setSecurityProfile as setSecProfile } from './security/securityProfiles.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -133,7 +132,3 @@ export function listConfig(global = false) {
         ...getProjectConfig().store,
     };
 }
-
-// Security Profile Management
-export const getSecurityProfile = getSecProfile;
-export const setSecurityProfile = setSecProfile;

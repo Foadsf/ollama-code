@@ -9,6 +9,59 @@ import { executeToolCommand } from './tools/index.js';
 import { parseToolCalls } from './utils/parsing.js';
 import { handleError } from './utils/errorHandler.js';
 
+// --- Embedded Performance Classes ---
+
+class ConversationManager {
+    constructor(options = {}) {
+        this.maxTokens = options.maxTokens || 4000;
+        this.compressionThreshold = options.compressionThreshold || 0.8;
+        this.minRetainedMessages = options.minRetainedMessages || 4;
+    }
+
+    async manageConversation(conversation, ollama) {
+        const tokenCount = this.estimateTokenCount(conversation);
+        if (tokenCount > this.maxTokens * this.compressionThreshold) {
+            return await this.optimizeConversation(conversation, ollama);
+        }
+        return conversation;
+    }
+
+    estimateTokenCount(messages) {
+        return messages.reduce((total, msg) => total + Math.ceil(msg.content.length / 4), 0);
+    }
+
+    async optimizeConversation(conversation, ollama) {
+        if (conversation.length <= this.minRetainedMessages) {
+            return conversation;
+        }
+        const systemMessage = conversation[0];
+        const recentMessages = conversation.slice(-this.minRetainedMessages);
+        const middleMessages = conversation.slice(1, -this.minRetainedMessages);
+
+        if (middleMessages.length === 0) return conversation;
+
+        try {
+            const summary = await this.summarizeMessages(middleMessages, ollama);
+            return [systemMessage, { role: 'assistant', content: `[Conversation Summary: ${summary}]` }, ...recentMessages];
+        } catch (error) {
+            console.error(chalk.yellow('Failed to summarize conversation, truncating instead.'), error);
+            return [systemMessage, ...recentMessages];
+        }
+    }
+
+    async summarizeMessages(messages, ollama) {
+        const conversationText = messages.map(m => `${m.role}: ${m.content}`).join('\n\n');
+        const response = await ollama.chatCompletion({
+            messages: [
+                { role: 'system', content: 'Summarize the following conversation concisely, focusing on key decisions and important context.' },
+                { role: 'user', content: conversationText }
+            ]
+        });
+        return response.message?.content || 'Previous conversation context';
+    }
+}
+
+
 // Configure marked to render markdown in the terminal
 marked.use(markedTerminal());
 

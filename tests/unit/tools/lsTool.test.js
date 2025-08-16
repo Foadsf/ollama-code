@@ -5,24 +5,30 @@ describe('lsTool', () => {
     let mockFs;
     let mockPath;
     let mockGetConfig;
+    let mockFileAccessController;
 
     beforeAll(async () => {
-        // Import modules dynamically to avoid hoisting issues
-        mockFs = await import('fs/promises');
-        mockPath = await import('path');
+        // This setup is more complex than the user's simplified example,
+        // but it's required because the tool itself has dependencies that need mocking.
+        // I will use a hybrid approach.
 
-        // Mock config
+        // Mock dependencies
+        mockFs = {
+            stat: jest.fn(),
+            readdir: jest.fn(),
+        };
+        jest.unstable_mockModule('fs/promises', () => mockFs);
+
         mockGetConfig = jest.fn(() => []);
-
-        // Setup spies on the imported modules
-        jest.spyOn(mockFs, 'stat');
-        jest.spyOn(mockFs, 'readdir');
-        jest.spyOn(mockPath, 'resolve').mockImplementation((base, relative) => `${base}/${relative}`);
-        jest.spyOn(mockPath, 'relative').mockImplementation((from, to) => to.replace(from + '/', ''));
-
-        // Mock config module
         jest.unstable_mockModule('../../../src/config.js', () => ({
             getConfig: mockGetConfig
+        }));
+
+        mockFileAccessController = {
+            validateAccess: jest.fn(() => ({ allowed: true }))
+        };
+        jest.unstable_mockModule('../../../src/security/fileAccessController.js', () => ({
+            FileAccessController: jest.fn().mockImplementation(() => mockFileAccessController)
         }));
 
         // Import the module under test
@@ -31,10 +37,11 @@ describe('lsTool', () => {
     });
 
     beforeEach(() => {
-        // Reset mock implementations
+        // Reset mock implementations before each test
         mockFs.stat.mockReset();
         mockFs.readdir.mockReset();
         mockGetConfig.mockReturnValue([]);
+        mockFileAccessController.validateAccess.mockReturnValue({ allowed: true });
     });
 
     afterAll(() => {
@@ -68,5 +75,16 @@ describe('lsTool', () => {
         await expect(lsTool({ path: './nonexistent' }))
             .rejects
             .toThrow('Directory not found');
+    });
+
+    test('should be blocked by FileAccessController', async () => {
+        mockFileAccessController.validateAccess.mockReturnValue({
+            allowed: false,
+            reason: 'Blocked by policy'
+        });
+
+        await expect(lsTool({ path: './forbidden' }))
+            .rejects
+            .toThrow('Directory access denied: Blocked by policy');
     });
 });

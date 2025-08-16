@@ -9,11 +9,10 @@
     "scripts": {
         "start": "node --experimental-json-modules bin/ollama-code.js",
         "lint": "eslint src",
-        "test": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest",
-        "test:watch": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest --watch",
-        "test:coverage": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest --coverage",
-        "test:unit": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest tests/unit",
-        "test:integration": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest tests/integration"
+        "test": "node --experimental-vm-modules --max-old-space-size=4096 ./node_modules/.bin/jest --detectOpenHandles --forceExit",
+        "test:unit": "npm run test -- tests/unit",
+        "test:verbose": "npm run test -- --verbose",
+        "test:coverage": "npm run test -- --coverage"
     },
     "engines": {
         "node": ">=18.0.0"

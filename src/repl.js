@@ -10,6 +10,9 @@ import { ConversationManager } from './performance/conversationManager.js';
 import { auditLogger } from './security/auditLogger.js';
 import { parseToolCalls } from './utils/parsing.js';
 import { handleError } from './utils/errorHandler.js';
+import { systemMonitor } from './diagnostics/monitor.js';
+import { updateManager } from './updates/updateNotifier.js';
+import { fileWriteTool } from './tools/fileWriteTool.js';
 
 // Configure marked to render markdown in the terminal
 marked.use(markedTerminal());
@@ -20,6 +23,9 @@ marked.use(markedTerminal());
  * @param {Object} options - REPL options
  */
 export async function startREPL(initialQuery, options = {}) {
+    // Initialize update manager
+    updateManager.initialize().then(() => updateManager.checkForUpdates());
+
     const conversation = [];
     const verbose = options.verbose || getConfig('verbose');
     const print = options.print || false;
@@ -141,7 +147,7 @@ Respond in markdown format. Be concise and helpful.`
 
         // Handle slash commands
         if (query.startsWith('/')) {
-            await handleSlashCommand(query, { rl, conversation, ollama });
+            await handleSlashCommand(query, { rl, conversation, ollama, verbose });
             if (!print) rl.prompt();
             return;
         }
@@ -192,7 +198,16 @@ Respond in markdown format. Be concise and helpful.`
  * @param {string} command - The slash command
  * @param {Object} context - REPL context
  */
-async function handleSlashCommand(command, { rl, conversation, ollama }) {
+function getStatusIcon(status) {
+    switch (status) {
+        case 'healthy': return '✅';
+        case 'warning': return '⚠️';
+        case 'error': return '❌';
+        default: return '❓';
+    }
+}
+
+async function handleSlashCommand(command, { rl, conversation, ollama, verbose }) {
     const parts = command.slice(1).split(' ');
     const cmd = parts[0];
     const args = parts.slice(1);
@@ -210,8 +225,97 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
   ${chalk.blue('/models')} - List available Ollama models
   ${chalk.blue('/improve')} - Run a self-improvement cycle on the codebase
   ${chalk.blue('/security')} - Manage security settings
+  ${chalk.blue('/health')} - Run a system health check
+  ${chalk.blue('/diagnostics')} - Generate a diagnostic report
+  ${chalk.blue('/performance')} - Run performance checks
+  ${chalk.blue('/update')} - Check for updates
   ${chalk.blue('/exit')} - Exit Ollama Code
   `);
+            break;
+
+        case 'health':
+            const healthSpinner = ora('Running health check...').start();
+            try {
+                const healthReport = await systemMonitor.performHealthCheck();
+                healthSpinner.succeed(`Health check complete: ${healthReport.overall}`);
+
+                console.log(chalk.bold('\n🏥 System Health Report:'));
+                console.log(`Overall Status: ${getStatusIcon(healthReport.overall)} ${healthReport.overall.toUpperCase()}`);
+
+                Object.entries(healthReport.checks).forEach(([component, check]) => {
+                    console.log(`${component}: ${getStatusIcon(check.status)} ${check.status}`);
+                    if (check.issues?.length > 0) {
+                        check.issues.forEach(issue => console.log(`  ❌ ${issue}`));
+                    }
+                });
+
+                if (healthReport.recommendations?.length > 0) {
+                    console.log(chalk.bold('\n💡 Recommendations:'));
+                    healthReport.recommendations.forEach(rec => {
+                        console.log(`${rec.priority === 'high' ? '🔴' : rec.priority === 'medium' ? '🟡' : '🟢'} ${rec.title}`);
+                        console.log(`   ${rec.description}`);
+                        if (rec.action) console.log(`   ${chalk.cyan(rec.action)}`);
+                    });
+                }
+
+            } catch (error) {
+                handleError(error, { spinner: healthSpinner, verbose });
+            }
+            break;
+
+        case 'diagnostics':
+            const diagSpinner = ora('Generating diagnostic report...').start();
+            try {
+                const report = await systemMonitor.generateDiagnosticReport();
+                diagSpinner.succeed('Diagnostic report generated');
+
+                console.log(chalk.bold('\n📋 Diagnostic Report:'));
+                console.log(`Timestamp: ${report.timestamp}`);
+                console.log(`Version: ${report.version}`);
+                console.log(`Platform: ${report.environment.platform} ${report.environment.arch}`);
+                console.log(`Node.js: ${report.environment.nodeVersion}`);
+                console.log(`Uptime: ${Math.round(report.environment.uptime)}s`);
+
+                const reportFile = `olc-diagnostic-${Date.now()}.json`;
+                await fileWriteTool({ path: reportFile, content: JSON.stringify(report, null, 2) });
+                console.log(`\nDetailed report saved to: ${reportFile}`);
+
+            } catch (error) {
+                handleError(error, { spinner: diagSpinner, verbose });
+            }
+            break;
+
+        case 'performance':
+            if (args[0] === 'profile') {
+                const perfSpinner = ora('Running performance profile...').start();
+                try {
+                    const profile = await systemMonitor.performanceProfile();
+                    perfSpinner.succeed('Performance profiling complete');
+
+                    console.log(chalk.bold('\n⚡ Performance Profile:'));
+                    profile.tests.forEach(test => {
+                        console.log(`\n${test.name}:`);
+                        if (test.error) {
+                            console.log(`  ❌ Error: ${test.error}`);
+                        } else {
+                            Object.entries(test.metrics).forEach(([metric, value]) => {
+                                console.log(`  ${metric}: ${value}${metric.includes('Time') ? 'ms' : ''}`);
+                            });
+                        }
+                    });
+
+                } catch (error) {
+                    handleError(error, { spinner: perfSpinner, verbose });
+                }
+            }
+            break;
+
+        case 'update':
+            try {
+                await updateManager.showUpdateInfo();
+            } catch (error) {
+                console.error('Update check failed:', error.message);
+            }
             break;
 
         case 'security':

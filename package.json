@@ -9,7 +9,11 @@
     "scripts": {
         "start": "node --experimental-json-modules bin/ollama-code.js",
         "lint": "eslint src",
-        "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+        "test": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest",
+        "test:watch": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest --watch",
+        "test:coverage": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest --coverage",
+        "test:unit": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest tests/unit",
+        "test:integration": "node --experimental-vm-modules --no-warnings node_modules/.bin/jest tests/integration"
     },
     "engines": {
         "node": ">=18.0.0"
@@ -39,7 +43,8 @@
         "node-fetch": "^3.3.2",
         "ora": "^7.0.1",
         "simple-git": "^3.20.0",
-        "tiktoken": "^1.0.10"
+        "tiktoken": "^1.0.10",
+        "update-notifier": "^7.0.0"
     },
     "devDependencies": {
         "eslint": "^8.54.0",

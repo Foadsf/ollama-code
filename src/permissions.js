@@ -2,6 +2,19 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { addToConfig } from './config.js';
 
+// --- Embedded AuditLogger Class ---
+class AuditLogger {
+    constructor() {
+        this.logs = [];
+    }
+    log(entry) {
+        const logEntry = { timestamp: new Date().toISOString(), ...entry };
+        this.logs.push(logEntry);
+        console.log(chalk.grey(`[AUDIT]: ${JSON.stringify(logEntry)}`));
+    }
+}
+const auditLogger = new AuditLogger();
+
 // Track permissions granted for the current session
 const sessionPermissions = new Set();
 
@@ -75,6 +88,15 @@ export async function checkPermission(toolName, args) {
             when: (answers) => answers.permission,
         },
     ]);
+
+    const permanent = remember === 'project';
+    auditLogger.log({
+        event: 'permission_request',
+        toolName,
+        args,
+        granted: permission,
+        permanent,
+    });
 
     if (permission) {
         // Handle remembering the permission

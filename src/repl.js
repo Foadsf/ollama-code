@@ -7,6 +7,60 @@ import { getOllamaClient } from './ollama.js';
 import { getConfig } from './config.js';
 import { executeToolCommand } from './tools/index.js';
 import { parseToolCalls } from './utils/parsing.js';
+import { handleError } from './utils/errorHandler.js';
+
+// --- Embedded Performance Classes ---
+
+class ConversationManager {
+    constructor(options = {}) {
+        this.maxTokens = options.maxTokens || 4000;
+        this.compressionThreshold = options.compressionThreshold || 0.8;
+        this.minRetainedMessages = options.minRetainedMessages || 4;
+    }
+
+    async manageConversation(conversation, ollama) {
+        const tokenCount = this.estimateTokenCount(conversation);
+        if (tokenCount > this.maxTokens * this.compressionThreshold) {
+            return await this.optimizeConversation(conversation, ollama);
+        }
+        return conversation;
+    }
+
+    estimateTokenCount(messages) {
+        return messages.reduce((total, msg) => total + Math.ceil(msg.content.length / 4), 0);
+    }
+
+    async optimizeConversation(conversation, ollama) {
+        if (conversation.length <= this.minRetainedMessages) {
+            return conversation;
+        }
+        const systemMessage = conversation[0];
+        const recentMessages = conversation.slice(-this.minRetainedMessages);
+        const middleMessages = conversation.slice(1, -this.minRetainedMessages);
+
+        if (middleMessages.length === 0) return conversation;
+
+        try {
+            const summary = await this.summarizeMessages(middleMessages, ollama);
+            return [systemMessage, { role: 'assistant', content: `[Conversation Summary: ${summary}]` }, ...recentMessages];
+        } catch (error) {
+            console.error(chalk.yellow('Failed to summarize conversation, truncating instead.'), error);
+            return [systemMessage, ...recentMessages];
+        }
+    }
+
+    async summarizeMessages(messages, ollama) {
+        const conversationText = messages.map(m => `${m.role}: ${m.content}`).join('\n\n');
+        const response = await ollama.chatCompletion({
+            messages: [
+                { role: 'system', content: 'Summarize the following conversation concisely, focusing on key decisions and important context.' },
+                { role: 'user', content: conversationText }
+            ]
+        });
+        return response.message?.content || 'Previous conversation context';
+    }
+}
+
 
 // Configure marked to render markdown in the terminal
 marked.use(markedTerminal());
@@ -31,6 +85,9 @@ export async function startREPL(initialQuery, options = {}) {
 
     // Create Ollama client
     const ollama = getOllamaClient();
+    const conversationManager = new ConversationManager({
+        maxTokens: getConfig('maxTokens', 4096)
+    });
 
     // Track token usage
     let totalInputTokens = 0;
@@ -75,6 +132,13 @@ Respond in markdown format. Be concise and helpful.`
         // Add user message to conversation
         conversation.push({ role: 'user', content: query });
 
+        // Manage conversation context before sending
+        const optimizedConversation = await conversationManager.manageConversation(conversation, ollama);
+        if (optimizedConversation.length < conversation.length) {
+            console.log(chalk.gray(`\n(Context optimized to ${optimizedConversation.length} messages)\n`));
+            conversation.splice(0, conversation.length, ...optimizedConversation);
+        }
+
         // Prepare messages for the API (including system message)
         const messages = [systemMessage, ...conversation];
 
@@ -102,10 +166,10 @@ Respond in markdown format. Be concise and helpful.`
             const toolCalls = parseToolCalls(response);
             if (toolCalls.length > 0) {
                 for (const toolCall of toolCalls) {
-                    spinner.start(`Executing tool: ${toolCall.name}`);
+                    const toolSpinner = ora(`Executing tool: ${toolCall.name}`).start();
                     try {
                         const result = await executeToolCommand(toolCall);
-                        spinner.succeed(`Tool ${toolCall.name} executed`);
+                        toolSpinner.succeed(`Tool ${toolCall.name} executed`);
 
                         // Add tool result to conversation
                         conversation.push({
@@ -119,10 +183,10 @@ Respond in markdown format. Be concise and helpful.`
                         // Get further instructions from the model
                         await processFollowup();
                     } catch (error) {
-                        spinner.fail(`Tool ${toolCall.name} failed: ${error.message}`);
+                        handleError(error, { spinner: toolSpinner, verbose });
                         conversation.push({
                             role: 'user',
-                            content: `Tool ${toolCall.name} failed with error: ${error.message}`
+                            content: `Tool ${error.toolName || toolCall.name} failed with error: ${error.message}`
                         });
 
                         // Get further instructions from the model
@@ -131,8 +195,7 @@ Respond in markdown format. Be concise and helpful.`
                 }
             }
         } catch (error) {
-            spinner.fail(`Error: ${error.message}`);
-            console.error(chalk.red(`\nError: ${error.message}\n`));
+            handleError(error, { spinner, verbose });
         }
 
         // Exit if in print mode
@@ -149,6 +212,12 @@ Respond in markdown format. Be concise and helpful.`
 
         try {
             let response = '';
+
+            const optimizedConversation = await conversationManager.manageConversation(conversation, ollama);
+            if (optimizedConversation.length < conversation.length) {
+                console.log(chalk.gray(`\n(Context optimized to ${optimizedConversation.length} messages)\n`));
+                conversation.splice(0, conversation.length, ...optimizedConversation);
+            }
 
             await ollama.chatCompletion({
                 messages: [systemMessage, ...conversation],
@@ -168,10 +237,10 @@ Respond in markdown format. Be concise and helpful.`
             const toolCalls = parseToolCalls(response);
             if (toolCalls.length > 0) {
                 for (const toolCall of toolCalls) {
-                    spinner.start(`Executing tool: ${toolCall.name}`);
+                    const toolSpinner = ora(`Executing tool: ${toolCall.name}`).start();
                     try {
                         const result = await executeToolCommand(toolCall);
-                        spinner.succeed(`Tool ${toolCall.name} executed`);
+                        toolSpinner.succeed(`Tool ${toolCall.name} executed`);
 
                         // Add tool result to conversation
                         conversation.push({
@@ -185,10 +254,10 @@ Respond in markdown format. Be concise and helpful.`
                         // Recursive call to get further instructions
                         await processFollowup();
                     } catch (error) {
-                        spinner.fail(`Tool ${toolCall.name} failed: ${error.message}`);
+                        handleError(error, { spinner: toolSpinner, verbose });
                         conversation.push({
                             role: 'user',
-                            content: `Tool ${toolCall.name} failed with error: ${error.message}`
+                            content: `Tool ${error.toolName || toolCall.name} failed with error: ${error.message}`
                         });
 
                         // Recursive call to get further instructions
@@ -197,8 +266,7 @@ Respond in markdown format. Be concise and helpful.`
                 }
             }
         } catch (error) {
-            spinner.fail(`Error: ${error.message}`);
-            console.error(chalk.red(`\nError: ${error.message}\n`));
+            handleError(error, { spinner, verbose });
         }
     };
 
@@ -233,7 +301,7 @@ Respond in markdown format. Be concise and helpful.`
  * @param {string} command - The slash command
  * @param {Object} context - REPL context
  */
-async function handleSlashCommand(command, { rl, conversation, ollama }) {
+async function handleSlashCommand(command, { rl, conversation, ollama, verbose }) {
     const parts = command.slice(1).split(' ');
     const cmd = parts[0];
     const args = parts.slice(1);
@@ -249,8 +317,19 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
   ${chalk.blue('/config')} - Manage configuration
   ${chalk.blue('/init')} - Initialize project with a OLLAMA_CODE.md guide
   ${chalk.blue('/models')} - List available Ollama models
+  ${chalk.blue('/improve')} - (NI) Run a self-improvement cycle
+  ${chalk.blue('/health')} - (NI) Run a system health check
   ${chalk.blue('/exit')} - Exit Ollama Code
   `);
+            break;
+
+        case 'improve':
+        case 'health':
+        case 'diagnostics':
+        case 'performance':
+        case 'update':
+        case 'security':
+            console.log(chalk.yellow(`Command '${cmd}' is not yet implemented in this version.`));
             break;
 
         case 'clear':
@@ -310,7 +389,7 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
 
                 initSpinner.succeed('Generated OLLAMA_CODE.md guide');
             } catch (error) {
-                initSpinner.fail(`Failed to generate guide: ${error.message}`);
+                handleError(error, { spinner: initSpinner, verbose });
             }
             break;
 
@@ -330,8 +409,7 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
                     });
                 }
             } catch (error) {
-                modelsSpinner.fail(`Failed to fetch models: ${error.message}`);
-                console.log(chalk.red('\nMake sure Ollama is running on http://localhost:11434'));
+                handleError(error, { spinner: modelsSpinner, verbose });
             }
             break;
 

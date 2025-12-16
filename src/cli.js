@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { startREPL } from './repl.js';
 import { getConfig, setConfig, listConfig } from './config.js';
-import pkg from '../package.json' assert { type: 'json' };
+import pkg from '../package.json' with { type: 'json' };
 const { version } = pkg;
 
 /**

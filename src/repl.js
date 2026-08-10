@@ -251,11 +251,13 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
   ${chalk.blue('/models')} - List available Ollama models
   ${chalk.blue('/exit')} - Exit Ollama Code
   `);
+            rl.prompt();
             break;
 
         case 'clear':
             conversation.length = 0;
             console.log(chalk.green('Conversation history cleared'));
+            rl.prompt();
             break;
 
         case 'compact':
@@ -264,6 +266,7 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
                 conversation.splice(0, conversation.length - 10);
             }
             console.log(chalk.green('Conversation compacted'));
+            rl.prompt();
             break;
 
         case 'cost':
@@ -282,36 +285,55 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
   Output tokens: ~${outputTokens}
   Total tokens: ~${inputTokens + outputTokens}
   `);
+            rl.prompt();
             break;
 
         case 'init':
             console.log(chalk.blue('Initializing project with OLLAMA_CODE.md...'));
-            // Generate a project guide
-            const initSpinner = ora('Generating project guide...').start();
             try {
-                const response = await ollama.chatCompletion({
-                    messages: [
-                        {
-                            role: 'system',
-                            content: 'You are an expert in code analysis. Create a detailed markdown guide for this project.'
-                        },
-                        {
-                            role: 'user',
-                            content: 'Analyze the current project directory and create a OLLAMA_CODE.md guide that explains the project structure, main components, and provides guidance for contributors.'
-                        }
-                    ]
+                // Dynamically import the project initializer module
+                const { initializeProject } = await import('./utils/projectInitializer.js');
+
+                // Initialize the project
+                const result = await initializeProject({
+                    outputPath: 'OLLAMA_CODE.md',
+                    projectName: 'Ollama Code (olc)'
                 });
 
-                const guideContent = response.message.content;
-
-                // Write the guide to a file
-                const fs = await import('fs/promises');
-                await fs.writeFile('OLLAMA_CODE.md', guideContent);
-
-                initSpinner.succeed('Generated OLLAMA_CODE.md guide');
+                if (result.success) {
+                    console.log(chalk.green(`Project initialized successfully!`));
+                    console.log(chalk.gray(`Created: ${result.files.join(', ')}`));
+                } else {
+                    console.error(chalk.red(`Initialization failed: ${result.error}`));
+                }
             } catch (error) {
-                initSpinner.fail(`Failed to generate guide: ${error.message}`);
+                console.error(chalk.red(`Error during initialization: ${error.message}`));
             }
+            rl.prompt();
+            break;
+
+        case 'init':
+            console.log(chalk.blue('Initializing project with OLLAMA_CODE.md...'));
+            try {
+                // Correct the import path - use './utils/projectInitializer.js' instead of '../utils/projectInitializer.js'
+                const { initializeProject } = await import('./utils/projectInitializer.js');
+
+                // Initialize the project
+                const result = await initializeProject({
+                    outputPath: 'OLLAMA_CODE.md',
+                    projectName: 'Ollama Code (olc)'
+                });
+
+                if (result.success) {
+                    console.log(chalk.green(`Project initialized successfully!`));
+                    console.log(chalk.gray(`Created: ${result.files.join(', ')}`));
+                } else {
+                    console.error(chalk.red(`Initialization failed: ${result.error}`));
+                }
+            } catch (error) {
+                console.error(chalk.red(`Error during initialization: ${error.message}`));
+            }
+            rl.prompt();
             break;
 
         case 'models':
@@ -333,6 +355,7 @@ async function handleSlashCommand(command, { rl, conversation, ollama }) {
                 modelsSpinner.fail(`Failed to fetch models: ${error.message}`);
                 console.log(chalk.red('\nMake sure Ollama is running on http://localhost:11434'));
             }
+            rl.prompt();
             break;
 
         case 'exit':
